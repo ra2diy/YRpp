@@ -2,6 +2,7 @@
 
 #include <Helpers/CompileTime.h>
 
+#include <QueueClass.h>
 #include <TargetClass.h>
 #include <Unsorted.h>
 
@@ -155,42 +156,40 @@ union EventData
 
 class EventClass;
 
-template<size_t Length>
-struct EventList
-{
-public:
-	int Count;
-	int Head;
-	int Tail;
-	EventClass List[Length];
-	int Timings[Length];
-};
-
 class EventClass
 {
 public:
 	static constexpr reference<const char*, 0x82091C, 47> const EventNames{};
 
-	static constexpr reference<EventList<0x80>, 0xA802C8> OutList{};
-	static constexpr reference<EventList<0x4000>, 0x8B41F8> DoList{};
-	// If the event is a MegaMission, then add it to this list
-	static constexpr reference<EventList<0x100>, 0xA83ED0> MegaMissionList{};
+	/// <summary>队列容量（引擎 InitList_1132 里的 `mov ecx, 80h`）。</summary>
+	enum { MAX_EVENTS = 128 };
+
+	/// <summary>
+	/// 与 Phobos 的 YRpp 对齐：队列用 QueueClass 表示（布局 {Count, Head, Tail, Array[size], Timings[size]}）。
+	/// IDA 实证（gamemd.idb）：
+	///   · InitList_1132 清零 0x80 个 111 字节元素后，依次清 Count(0xA802C8)/Head(+4)/Tail(+8)；
+	///   · Networking_AddEvent_Generic 判 `cmp eax,80h`、写 Timings（timeGetTime）、`inc eax & 7Fh` 环形推进；
+	///   · InitList_1133 的 DoList 容量 = 0x4000 = MAX_EVENTS*128；InitList_1134 的 0xA83ED0 = 0x100。
+	/// </summary>
+	static constexpr reference<QueueClass<EventClass, MAX_EVENTS>, 0xA802C8> OutList{};
+	static constexpr reference<QueueClass<EventClass, MAX_EVENTS * 128>, 0x8B41F8> DoList{};
+	// 引擎内部用的队列：xref 只来自 DoList 自身与 InitList_1134（0x4E7F00），外部不往里加
+	// static constexpr reference<QueueClass<EventClass, MAX_EVENTS * 2>, 0xA83ED0> MegaMissionList{};
 
 	// this points to CRCs from 0x100 last frames
 	static constexpr reference<DWORD, 0xB04474, 256> const LatestFramesCRC{};
 	static constexpr reference<DWORD, 0xAC51FC> const CurrentFrameCRC{};
 
+	[[deprecated("Use OutList->Add() instead.")]]
 	static bool AddEvent(const EventClass& event)
 	{
-		if (OutList->Count >= 128)
-			return false;
+		return OutList->Add(event);
+	}
 
-		OutList->List[OutList->Tail] = event;
-
-		OutList->Timings[OutList->Tail] = static_cast<int>(Imports::TimeGetTime()());
-
-		++OutList->Count;
-		OutList->Tail = (OutList->Tail + 1) & 127;
+	// 只有 Type + HouseIndex（IDA 实证 0x4C66C0：写 [esi]=Type、[esi+2]=HouseIndex、[esi+3]=Frame，retn 8）
+	explicit EventClass(int houseIndex, EventType eventType)
+	{
+		JMP_THIS(0x4C66C0);
 	}
 
 	// Special
